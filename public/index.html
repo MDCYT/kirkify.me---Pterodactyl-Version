@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>kirkify.me</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="container">
+    <header>
+      <h1>Kirkify Yourself!!</h1>
+    </header>
+
+    <main>
+      <div id="upload-section" class="card">
+        <div class="drop-zone" id="dropZone">
+          <h3>Drop image here</h3>
+          <p>or <span class="browse-btn">browse files</span></p>
+          <input type="file" id="fileInput" accept="image/jpeg, image/jpg, image/png, image/webp" hidden>
+        </div>
+        
+        <div id="preview" class="preview hidden">
+          <img id="previewImage" alt="Preview">
+          <p id="fileName" class="file-name"></p>
+        </div>
+
+        <button id="uploadBtn" class="btn btn-primary" disabled>
+          <span id="btnText">Kirkify</span>
+          <span id="btnSpinner" class="spinner hidden"></span>
+        </button>
+
+        <div id="errorMsg" class="error hidden"></div>
+      </div>
+
+      <div id="result-section" class="card hidden">
+        <div class="result-container">
+          <img id="resultImage" alt="Result">
+        </div>
+        <div class="result-actions">
+          <a id="downloadBtn" class="btn btn-success" download>Download</a>
+          <button id="newImageBtn" class="btn btn-secondary">New Image</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Shameless self promotion -->
+  <div class="footer-container">
+    <p class="footer-text">follow me i make dumb stuff</p>
+    <footer class="social-footer">
+      <a href="https://x.com/DylanOonk" target="_blank" class="social-btn twitter">
+        my twitter
+      </a>
+      <a href="https://instagram.com/dylanoonktx" target="_blank" class="social-btn instagram">
+        insta
+      </a>
+       <a href="https://buymeacoffee.com/dylanoonk" target="_blank" class="social-btn buymeacoffee">
+        give me money
+      </a>
+    </footer>
+  </div>
+  
+  <script src="script.js"></script>
+</body>
+
+<!-- The worst idea I ever had was playing this in the background -->
+<audio id="bgAudio" loop autoplay>
+  <source src="/bg.mp3" type="audio/mpeg">
+  Your browser does not support the audio element.
+</audio>
+</html>

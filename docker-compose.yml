@@ -1,0 +1,7 @@
+services:
+  web:
+    build: .
+    container_name: kirkify.me
+    ports:
+      - "3000:3000"
+    restart: always
