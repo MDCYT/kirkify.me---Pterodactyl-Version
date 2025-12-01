@@ -3,83 +3,68 @@ const multer = require('multer');
 const { spawn } = require('child_process');
 const path = require('path');
 const fsp = require('fs').promises;
+const fs = require('fs');
 const crypto = require('crypto');
 
-
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.SERVER_PORT || process.env.PORT || 3000;
+
+// Use writable directory (Pterodactyl compatible)
+const BASE_UPLOAD_DIR = process.env.UPLOAD_DIR || '/home/container/uploads';
+
+// Ensure base dirs exist
+fs.mkdirSync(`${BASE_UPLOAD_DIR}/temp`, { recursive: true });
+fs.mkdirSync(`${BASE_UPLOAD_DIR}/output`, { recursive: true });
+
 const GENERIC_ERROR_MESSAGE = process.env.GENERIC_ERROR_MESSAGE;
 const NO_FACES_DETECTED_ERROR_MESSAGE = process.env.NO_FACES_DETECTED_ERROR_MESSAGE;
 
-// Start up the actual kirkification engine in the background
+// Start Python engine
 const pythonProcess = spawn('python3', ['kirkifier.py']);
-// For optimization purposes, requests are stored here and processed on a first come first serve basis
-const pendingRequests = new Map();
 
-// Set up storage object
+// Multer storage
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    // Uploads are stored in uploads/temp
-    const uploadDir = 'uploads/temp';
-    await fsp.mkdir(uploadDir, { recursive: true });
-    cb(null, uploadDir);
+    cb(null, `${BASE_UPLOAD_DIR}/temp`);
   },
   filename: (req, file, cb) => {
-    // Files are given a unique to avoid conflicts and to stop those darn path traversal attacks
     const uniqueName = `${crypto.randomBytes(16).toString('hex')}${path.extname(file.originalname)}`;
     cb(null, uniqueName);
   }
 });
 
-// File filter (only images) 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-  if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    console.log(`Rejected non-image file: ${file.originalname} (mimetype: ${file.mimetype})`);
-    cb(new Error('Invalid file type. Only JPEG, PNG, and GIF images are allowed.'));
-  }
+  if (allowedTypes.includes(file.mimetype)) cb(null, true);
+  else cb(new Error('Invalid file type.'));
 };
 
 const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB 
-  },
-  fileFilter: fileFilter
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter
 });
 
-
+// Serve static files from writable dir
+app.use('/uploads', express.static(`${BASE_UPLOAD_DIR}`));
 app.use(express.static('public'));
-app.use('/uploads', express.static('uploads'));
 
-
-
-// This is where the magic happens (This runs every time the kirkifier outputs on stdout)
+// Python stdout handler (igual a tu código)
+const pendingRequests = new Map();
 pythonProcess.stdout.on('data', (data) => {
   try {
-
     const lines = data.toString().split('\n').filter(line => line.trim());
-
     for (const line of lines) {
-
       const response = JSON.parse(line);
       const requestId = response.request_id;
-      
+
       if (pendingRequests.has(requestId)) {
-        // Pull back up the request object
         const { resolve, reject, cleanup } = pendingRequests.get(requestId);
-        // Remove it from the queue
         pendingRequests.delete(requestId);
         cleanup();
-        
-        if (response.error) {
-          reject(new Error(response.error));
-        } else {
-          // Send back output path
-          resolve(response);
-        }
+
+        if (response.error) reject(new Error(response.error));
+        else resolve(response);
       }
     }
   } catch (e) {
@@ -87,64 +72,28 @@ pythonProcess.stdout.on('data', (data) => {
   }
 });
 
-
 pythonProcess.stderr.on('data', (data) => {
-  const stderrText = data.toString().trim();
-  console.error('Python stderr:', stderrText);
-  
-  try {
-    const errorData = JSON.parse(stderrText);
-    
-    // If it has a request_id, reject the specific pending request
-    if (errorData.request_id && pendingRequests.has(errorData.request_id)) {
-      const { reject, cleanup } = pendingRequests.get(errorData.request_id);
-      pendingRequests.delete(errorData.request_id);
-      cleanup();
-      reject(new Error(errorData.error || 'Unknown Python error'));
-    }
-    
-    
-    
-  } catch (e) {
-    console.error(`ERROR: ${stderrText}`);
-  }
+  console.error('Python stderr:', data.toString());
 });
 
-pythonProcess.on('error', (err) => {
-  console.error('Python process died:', err);
-  
-  pendingRequests.forEach(({ reject, cleanup }) => {
-    cleanup();
-    reject(new Error('Python process crashed'));
-  });
-  pendingRequests.clear();
-});
 
-// Basically all this does is add the incoming request to the queue 
+// Route handler
 app.post('/api/upload', upload.single('image'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
-    }
+    if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded' });
 
-    // The file will be saved as kirkified_(current time).jpg
     const inputPath = req.file.path;
     const outputFilename = `kirkified_${Date.now()}.jpg`;
-    const outputPath = path.join('uploads/output', outputFilename);
+    const outputPath = path.join(`${BASE_UPLOAD_DIR}/output`, outputFilename);
     const requestId = crypto.randomUUID();
 
-    console.log(`received '${req.file.originalname}' as ${req.file.filename}`);
-
-    await fsp.mkdir('uploads/output', { recursive: true });
-    
-    // Create promise with timeout
     let timeoutId;
     const responsePromise = new Promise((resolve, reject) => {
       timeoutId = setTimeout(() => {
         pendingRequests.delete(requestId);
         reject(new Error('Python process timeout'));
       }, 30000);
-      
+
       pendingRequests.set(requestId, {
         resolve,
         reject,
@@ -152,19 +101,16 @@ app.post('/api/upload', upload.single('image'), async (req, res) => {
       });
     });
 
-    // Send to kirkifier through stdin
     pythonProcess.stdin.write(JSON.stringify({
       request_id: requestId,
       target_path: inputPath,
       output_path: outputPath
     }) + "\n");
 
-    // Wait for response
     await responsePromise;
-    
-    // Clean up temp file
+
+    // Clean temp file
     await fsp.unlink(inputPath).catch(() => {});
-    
 
     res.json({
       success: true,
@@ -173,35 +119,30 @@ app.post('/api/upload', upload.single('image'), async (req, res) => {
     });
 
   } catch (error) {
+    const errorMessage = error.message === 'NO_FACES_DETECTED'
+      ? NO_FACES_DETECTED_ERROR_MESSAGE
+      : GENERIC_ERROR_MESSAGE;
 
-    if (error?.message !== 'NO_FACES_DETECTED') {
-      console.error('Upload error:', error);
-    }
-    
-    // If no faces are detected (a shockingly common problem) then return an error, otherwise return a generic error
-    const errorMessage = error.message === 'NO_FACES_DETECTED' ? NO_FACES_DETECTED_ERROR_MESSAGE : GENERIC_ERROR_MESSAGE;
-
-    res.status(500).json({ 
-      success: false, 
-      error: errorMessage 
+    res.status(500).json({
+      success: false,
+      error: errorMessage
     });
   }
 });
 
-// Once an hour delete kirkified images
+
+// Cleanup old output
 setInterval(async () => {
   try {
-    const outputDir = 'uploads/output';
-    const files = await fsp.readdir(outputDir);
+    const files = await fsp.readdir(`${BASE_UPLOAD_DIR}/output`);
     const now = Date.now();
     const oneHour = 60 * 60 * 1000;
 
     for (const file of files) {
-      const filePath = path.join(outputDir, file);
+      const filePath = `${BASE_UPLOAD_DIR}/output/${file}`;
       const stats = await fsp.stat(filePath);
       if (now - stats.mtime.getTime() > oneHour) {
         await fsp.unlink(filePath);
-        console.log(`Cleaned up old file: ${file}`);
       }
     }
   } catch (error) {
