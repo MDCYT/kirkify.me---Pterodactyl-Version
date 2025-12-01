@@ -21,16 +21,29 @@ def suppress_output():
         finally:
             sys.stdout, sys.stderr = old_stdout, old_stderr
 
-# I moved this into its own function to clean up the code
-def initialize_faceanalysis_and_swapper() -> tuple[FaceAnalysis, insightface.model_zoo.model_zoo.INSwapper]:
-    faceanalysis: FaceAnalysis = FaceAnalysis(name="buffalo_l")
+def initialize_faceanalysis_and_swapper():
+    import os
+    
+    root = os.environ.get("INSIGHTFACE_HOME", "/app/.insightface")
+    os.makedirs(root, exist_ok=True)
+
+    faceanalysis = FaceAnalysis(
+        name="buffalo_l",
+        root=root
+    )
     faceanalysis.prepare(ctx_id=0, det_size=(640, 640))
 
-    # inswapper_128.onnx isn't available anymore so I have to explicitly tell it not to download
-    # This is also why it needed to be downloaded in the Dockerfile
-    swapper: insightface.model_zoo.model_zoo.INSwapper = insightface.model_zoo.get_model('inswapper_128.onnx', download=False, download_zip=False)
+    swapper = insightface.model_zoo.get_model(
+        'inswapper_128.onnx',
+        download=False,
+        download_zip=False,
+        root=root
+    )
 
     return faceanalysis, swapper
+
+
+
 
 # This is where the magic happens
 def kirkify(target_image_path: str, output_path: str, faceanalysis: FaceAnalysis, swapper: insightface.model_zoo.model_zoo.INSwapper):
